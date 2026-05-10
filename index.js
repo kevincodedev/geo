@@ -14,10 +14,9 @@ const userRoutes = require('./routes/users');
 const db = mysql.createPool({
   host: process.env.DB_HOST || 'localhost',
   user: process.env.DB_USER || 'root',
-  password: process.env.DB_PASSWORD || '',
+  password: process.env.DB_PASS || '',
   database: process.env.DB_NAME || 'geoproyect'
 });
-
 
 
 const loginLimiter = rateLimit({
@@ -109,32 +108,32 @@ app.post('/api/elementos', verificarToken, async (req, res) => {
   try {
     // 1. Buscar el estado_id por nombre (Miranda, etc.)
     const [states] = await db.promise().query("SELECT id FROM estados WHERE nombre = ? LIMIT 1", [estado]);
-
+    
     if (states.length === 0) {
       return res.status(400).json({ mensaje: `Estado '${estado}' no encontrado.` });
     }
-
+    
     const estado_id = states[0].id;
-    const tecnologiaStr = Array.isArray(tecnologia) ? tecnologia.join(', ') : tecnologia;
+    const tecnologiaStr = Array.isArray(tecnologia) ? tecnologia.join(' / ') : tecnologia;
 
     if (tipo === 'antenas') {
       const checkAntenaSql = "SELECT id FROM elementos WHERE tipo = 'antenas' AND nombre = ? LIMIT 1";
       const [results] = await db.promise().query(checkAntenaSql, [nombre]);
-
+      
       if (results.length > 0) {
         return res.status(400).json({ mensaje: "Ya existe una antena registrada con ese nombre." });
       }
 
       const sql = "INSERT INTO elementos (nombre, tipo, estado_id, latitud, longitud, direccion, actividad, tecnologia, cantidad) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)";
       const values = [nombre, tipo, estado_id, latitud, longitud, direccion, actividad, tecnologiaStr, 1];
-
+      
       const [result] = await db.promise().query(sql, values);
       res.json({ mensaje: "Antena guardada", id: result.insertId });
 
     } else if (tipo === 'abonados') {
       const checkSql = "SELECT id, cantidad, segmentacion FROM elementos WHERE tipo = 'abonados' AND estado_id = ? LIMIT 1";
       const [results] = await db.promise().query(checkSql, [estado_id]);
-
+      
       if (results.length > 0) {
         const idExistente = results[0].id;
         const segActual = results[0].segmentacion || "3G:0 | 4G:0 | 5G:0";
@@ -169,7 +168,7 @@ app.post('/api/elementos', verificarToken, async (req, res) => {
       const { codigoDealer, clasificacion } = req.body;
       const checkAgenteSql = "SELECT id FROM elementos WHERE tipo = 'agentes' AND codigo_dealer = ? LIMIT 1";
       const [results] = await db.promise().query(checkAgenteSql, [codigoDealer]);
-
+      
       if (results.length > 0) {
         return res.status(400).json({ mensaje: "Este Código Dealer ya se encuentra registrado." });
       }
@@ -181,7 +180,7 @@ app.post('/api/elementos', verificarToken, async (req, res) => {
     } else {
       const checkSql = "SELECT id, cantidad FROM elementos WHERE tipo = ? AND estado_id = ? LIMIT 1";
       const [results] = await db.promise().query(checkSql, [tipo, estado_id]);
-
+      
       if (results.length > 0) {
         const nuevaCantidadTotal = Number(results[0].cantidad) + Number(cantidad);
         const updateSql = "UPDATE elementos SET cantidad = ? WHERE id = ?";
@@ -196,6 +195,20 @@ app.post('/api/elementos', verificarToken, async (req, res) => {
     }
   } catch (error) {
     console.error("Error al procesar elemento:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Endpoint para actualización rápida de coordenadas (Geocodificador de reparación)
+app.put('/api/elementos/:id/coordenadas', verificarToken, async (req, res) => {
+  const { id } = req.params;
+  const { latitud, longitud } = req.body;
+
+  try {
+    const sql = "UPDATE elementos SET latitud = ?, longitud = ? WHERE id = ?";
+    await db.promise().query(sql, [latitud, longitud, id]);
+    res.json({ mensaje: "Coordenadas actualizadas con éxito" });
+  } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
@@ -229,8 +242,28 @@ app.post('/api/importar-masivo', async (req, res) => {
         continue;
       }
 
-      const sql = "INSERT INTO elementos (nombre, tipo, estado_id, latitud, longitud, direccion) VALUES (?, ?, ?, ?, ?, ?)";
-      await db.promise().query(sql, [fila.nombre, fila.tipo, estado_id, fila.latitud, fila.longitud, fila.direccion]);
+      const sql = `
+        INSERT INTO elementos 
+          (nombre, tipo, estado_id, latitud, longitud, direccion, actividad, tecnologia, cantidad, segmentacion, codigo_dealer, clasificacion) 
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `;
+      
+      const values = [
+        fila.nombre, 
+        fila.tipo || 'antenas', 
+        estado_id, 
+        fila.latitud || 0, 
+        fila.longitud || 0, 
+        fila.direccion || '',
+        fila.actividad || 'Operativa',
+        fila.tecnologia || '/ / /',
+        fila.cantidad || 1,
+        fila.segmentacion || null,
+        fila.codigo_dealer || fila.codigoDealer || null,
+        fila.clasificacion || null
+      ];
+
+      await db.promise().query(sql, values);
     }
 
     res.json({ mensaje: `${filas.length} elementos integrados con éxito` });
