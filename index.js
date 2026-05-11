@@ -7,6 +7,7 @@ const jwt = require('jsonwebtoken');
 require('dotenv').config();
 
 const app = express();
+app.set('trust proxy', 1);
 const authRoutes = require('./routes/auth');
 const JWT_SECRET = process.env.JWT_SECRET || "mi_llave_secreta_default_cambiame";
 const userRoutes = require('./routes/users');
